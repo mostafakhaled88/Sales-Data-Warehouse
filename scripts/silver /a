@@ -1,0 +1,9 @@
+--Test cleaning logic for CUSTOMERNAME
+SELECT TOP 20
+    CustomerName AS RawCustomerName,
+    LTRIM(RTRIM(REPLACE(CustomerName, '"', ''))) AS CleanedCustomerName
+FROM bronze.sales_raw
+WHERE CustomerName LIKE '"%'   -- only look at rows starting with quotes
+   OR CustomerName LIKE '% "'  -- or ending with quotes/spaces
+   OR CustomerName LIKE '%  %' -- or double spaces
+ORDER BY CustomerName;
