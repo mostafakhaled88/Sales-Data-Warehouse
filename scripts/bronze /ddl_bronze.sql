@@ -1,12 +1,13 @@
 /*
 =============================================================
-Bronze Layer DDL - Raw Ingestion
+Bronze Layer DDL - Raw Ingestion (Text-based)
 =============================================================
 Database: SalesDWH
 Purpose:
     - Create a single raw table in the Bronze schema.
-    - Store all source data as-is (no transformations).
-    - Silver layer will later create Fact & Dimension tables.
+    - All columns stored as NVARCHAR (flexible, no parsing).
+    - Silver layer will later create Fact & Dimension tables
+      with proper data types and transformations.
 =============================================================
 */
 
@@ -18,39 +19,39 @@ IF OBJECT_ID('bronze.sales_raw', 'U') IS NOT NULL
     DROP TABLE bronze.sales_raw;
 GO
 
--- Create Bronze Raw Table
+-- Create Bronze Raw Table (all as NVARCHAR)
 CREATE TABLE bronze.sales_raw
 (
     -- Customer Info
-    CustomerId       INT,
-    FirstName        NVARCHAR(100),
-    LastName         NVARCHAR(100),
-    City             NVARCHAR(100),
-    Country          NVARCHAR(100),
-    Phone            NVARCHAR(50),
+    CustomerId          NVARCHAR(50) NULL,
+    FirstName           NVARCHAR(100) NULL,
+    LastName            NVARCHAR(100) NULL,
+    City                NVARCHAR(100) NULL,
+    Country             NVARCHAR(100) NULL,
+    Phone               NVARCHAR(50) NULL,
 
     -- Order Info
-    OrderId          INT,
-    OrderDate        DATETIME,
-    OrderNumber      NVARCHAR(50),
-    TotalAmount      DECIMAL(18,2),
+    OrderId             NVARCHAR(50) NULL,
+    OrderDate           NVARCHAR(50) NULL,
+    OrderNumber         NVARCHAR(50) NULL,
+    TotalAmount         NVARCHAR(50) NULL,
 
     -- Order Item Info
-    OrderItemId      INT,
-    ProductId        INT,
-    Order_UnitPrice  DECIMAL(18,2),
-    Quantity         INT,
+    OrderItemId         NVARCHAR(50) NULL,
+    ProductId           NVARCHAR(50) NULL,
+    Order_UnitPrice     NVARCHAR(50) NULL,
+    Quantity            NVARCHAR(50) NULL,
 
     -- Product Info
-    ProductName      NVARCHAR(200),
-    SupplierId       INT,
-    Product_UnitPrice DECIMAL(18,2),
-    Package          NVARCHAR(100),
-    IsDiscontinued   BIT,
+    ProductName         NVARCHAR(200) NULL,
+    SupplierId          NVARCHAR(50) NULL,
+    Product_UnitPrice   NVARCHAR(50) NULL,
+    Package             NVARCHAR(100) NULL,
+    IsDiscontinued      NVARCHAR(50) NULL,
 
     -- Supplier Info
-    SupplierName     NVARCHAR(200)
+    SupplierName        NVARCHAR(200) NULL
 );
 GO
 
-PRINT ' Bronze layer table [bronze.sales_raw] created successfully.';
+PRINT '✅ Bronze layer table [bronze.sales_raw] created successfully.';
