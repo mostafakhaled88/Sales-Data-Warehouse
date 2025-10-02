@@ -1,3 +1,14 @@
+CREATE TABLE [SalesDWH].[silver].[dimLocation] (
+    LocationKey INT IDENTITY(1,1) PRIMARY KEY,
+    City NVARCHAR(255) NULL,
+    PostalCode NVARCHAR(50) NULL,
+    Country NVARCHAR(255) NULL,
+    Territory NVARCHAR(50) NULL
+);
+
+
+
+
 INSERT INTO [SalesDWH].[silver].[dimLocation] (City, PostalCode, Country, Territory)
 SELECT DISTINCT
     -- City Cleaning
