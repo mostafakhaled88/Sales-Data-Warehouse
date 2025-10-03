@@ -20,41 +20,29 @@ CREATE TABLE [SalesDWH].[silver].[DimCustomer] (
 
 
 INSERT INTO [SalesDWH].[silver].[DimCustomer] 
-    (CustomerName, Phone, AddressLine, LocationKey)
+    (CustomerName, Phone, AddressLine, ContactFirstName, LocationKey)
 SELECT DISTINCT
-    -- CustomerName cleaned
     REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE([CUSTOMERNAME], '+', ''), '(', ''), ')', ''), '"', ''), '.', ''), ',', ''), '/', '') AS CustomerName,
-
-    -- Phone cleaned
     CASE 
         WHEN PATINDEX('%[0-9]%', REPLACE([PHONE], '+','')) = 0 THEN 'Unknown'
         ELSE REPLACE(REPLACE(REPLACE([PHONE], '+',''), '(',''),')','')
     END AS Phone,
-
-    -- One Address line
     COALESCE(NULLIF(LTRIM(RTRIM(REPLACE([ADDRESSLINE1], '"',''))), ''), 
              NULLIF(LTRIM(RTRIM(REPLACE([ADDRESSLINE2], '"',''))), '')) AS AddressLine,
-			 CASE 
-        WHEN CONTACTFIRSTNAME IS NULL OR LTRIM(RTRIM(CONTACTFIRSTNAME)) = '' 
-            THEN 'Unknown'
+    CASE 
+        WHEN CONTACTFIRSTNAME IS NULL OR LTRIM(RTRIM(CONTACTFIRSTNAME)) = '' THEN 'Unknown'
         WHEN CONTACTFIRSTNAME LIKE '%EMEA%' OR CONTACTFIRSTNAME LIKE '%APAC%' OR CONTACTFIRSTNAME LIKE '%NA%'
-            OR CONTACTFIRSTNAME LIKE '%Japan%' OR CONTACTFIRSTNAME LIKE '%Citeaux%'
-            OR CONTACTFIRSTNAME LIKE '%France%' OR CONTACTFIRSTNAME LIKE '%Germany%'
-            OR CONTACTFIRSTNAME LIKE '%Spain%' OR CONTACTFIRSTNAME LIKE '%USA%'
-            OR CONTACTFIRSTNAME LIKE '%UK%' OR CONTACTFIRSTNAME LIKE '%Sweden%'
-            OR CONTACTFIRSTNAME LIKE '%Norway%' OR CONTACTFIRSTNAME LIKE '%Singapore%'
-            THEN 'Unknown'
+             OR CONTACTFIRSTNAME LIKE '%Japan%' OR CONTACTFIRSTNAME LIKE '%Citeaux%'
+             OR CONTACTFIRSTNAME LIKE '%France%' OR CONTACTFIRSTNAME LIKE '%Germany%'
+             OR CONTACTFIRSTNAME LIKE '%Spain%' OR CONTACTFIRSTNAME LIKE '%USA%'
+             OR CONTACTFIRSTNAME LIKE '%UK%' OR CONTACTFIRSTNAME LIKE '%Sweden%'
+             OR CONTACTFIRSTNAME LIKE '%Norway%' OR CONTACTFIRSTNAME LIKE '%Singapore%' THEN 'Unknown'
         WHEN PATINDEX('%[0-9]%', CONTACTFIRSTNAME) > 0 THEN 'Unknown'
         ELSE LTRIM(RTRIM(CONTACTFIRSTNAME))
     END AS ContactFirstName,
-
-    -- LocationKey (lookup join)
     l.LocationKey
 FROM [SalesDWH].[bronze].[sales_raw] b
 INNER JOIN [SalesDWH].[silver].[dimLocation] l
     ON ISNULL(NULLIF(LTRIM(RTRIM(b.City)), ''), 'Unknown') = l.City
    AND ISNULL(NULLIF(LTRIM(RTRIM(b.PostalCode)), ''), 'Unknown') = l.PostalCode
    AND ISNULL(NULLIF(LTRIM(RTRIM(b.Country)), ''), 'Unknown') = l.Country;
-
-
-   select * from [SalesDWH].[silver].[DimCustomer] 
