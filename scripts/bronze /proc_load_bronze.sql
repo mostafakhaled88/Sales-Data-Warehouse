@@ -40,16 +40,16 @@ CREATE PROCEDURE bronze.load_bronze as
 		TRUNCATE TABLE bronze.sales_raw;
 
 		-- Bulk insert from CSV
-		BULK INSERT bronze.sales_raw
-		FROM 'C:\SQLData\sales_data.csv'
-		WITH 
-		(
-			FIRSTROW = 2,                 -- Skip header row
-			FIELDTERMINATOR = ',',        -- Column delimiter
-			ROWTERMINATOR = '0x0a',       -- Line feed (\n)
-			TABLOCK,
-			CODEPAGE = '65001'            -- UTF-8 support
-		);
+		BULK INSERT [SalesDWH].[bronze].[sales_raw]
+FROM 'C:\SQLData\sales_data_cleaned.csv'
+WITH (
+    FORMAT = 'CSV',
+    FIRSTROW = 2,
+    FIELDTERMINATOR = ',',
+    ROWTERMINATOR = '\n',
+    TABLOCK
+);
+
 
 		PRINT ' Bronze Load Completed Successfully.';
 	SET @batch_end_time = GETDATE();
