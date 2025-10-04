@@ -1,16 +1,13 @@
 /*
-=============================================================
-Bronze Layer DDL - Raw Ingestion (Text-based)
-=============================================================
-Database: SalesDWH
-Purpose:
-    - Create a single raw table in the Bronze schema.
-    - All columns stored as NVARCHAR (flexible, no parsing).
-    - Silver layer will later create Fact & Dimension tables
-      with proper data types and transformations.
-=============================================================
+===============================================================================
+DDL Script: Create Bronze Tables
+===============================================================================
+Script Purpose:
+    This script creates tables in the 'bronze' schema, dropping existing tables 
+    if they already exist.
+	  Run this script to re-define the DDL structure of 'bronze' Tables
+===============================================================================
 */
-
 USE SalesDWH;
 GO
 
@@ -54,4 +51,4 @@ CREATE TABLE bronze.sales_raw
 );
 GO
 
-PRINT '✅ Bronze layer table [bronze.sales_raw] created successfully.';
+PRINT 'Bronze layer table [bronze.sales_raw] created successfully.';
