@@ -1,54 +1,69 @@
 /*
 ===============================================================================
-DDL Script: Create Bronze Tables
+Stored Procedure: Load Bronze Layer (Source -> Bronze)
 ===============================================================================
 Script Purpose:
-    This script creates tables in the 'bronze' schema, dropping existing tables 
-    if they already exist.
-	  Run this script to re-define the DDL structure of 'bronze' Tables
+    This stored procedure loads data into the 'bronze' schema from external CSV files. 
+    It performs the following actions:
+    - Truncates the bronze tables before loading data.
+    - Uses the `BULK INSERT` command to load data from csv Files to bronze tables.
+
+Parameters:
+    None. 
+	  This stored procedure does not accept any parameters or return any values.
+
+Usage Example:
+    EXEC bronze.load_bronze;
 ===============================================================================
 */
+
 USE SalesDWH;
 GO
 
--- Drop existing raw table if needed
-IF OBJECT_ID('bronze.sales_raw', 'U') IS NOT NULL
-    DROP TABLE bronze.sales_raw;
+IF OBJECT_ID('bronze.load_bronze', 'P') IS NOT NULL
+    DROP PROCEDURE bronze.load_bronze;
 GO
 
--- Create Bronze Raw Table (all as NVARCHAR)
-CREATE TABLE bronze.sales_raw
-(
-    -- Customer Info
-    CustomerId          NVARCHAR(50) NULL,
-    FirstName           NVARCHAR(100) NULL,
-    LastName            NVARCHAR(100) NULL,
-    City                NVARCHAR(100) NULL,
-    Country             NVARCHAR(100) NULL,
-    Phone               NVARCHAR(50) NULL,
+CREATE PROCEDURE bronze.load_bronze as
 
-    -- Order Info
-    OrderId             NVARCHAR(50) NULL,
-    OrderDate           NVARCHAR(50) NULL,
-    OrderNumber         NVARCHAR(50) NULL,
-    TotalAmount         NVARCHAR(50) NULL,
+	BEGIN
+		DECLARE @batch_start_time DATETIME, @batch_end_time DATETIME; 
+		BEGIN TRY
+			SET @batch_start_time = GETDATE();
+			PRINT '================================================';
+			PRINT 'Loading Bronze Layer';
+			PRINT '================================================';
 
-    -- Order Item Info
-    OrderItemId         NVARCHAR(50) NULL,
-    ProductId           NVARCHAR(50) NULL,
-    Order_UnitPrice     NVARCHAR(50) NULL,
-    Quantity            NVARCHAR(50) NULL,
+		
 
-    -- Product Info
-    ProductName         NVARCHAR(200) NULL,
-    SupplierId          NVARCHAR(50) NULL,
-    Product_UnitPrice   NVARCHAR(50) NULL,
-    Package             NVARCHAR(100) NULL,
-    IsDiscontinued      NVARCHAR(50) NULL,
+		-- Truncate existing data
+		TRUNCATE TABLE bronze.sales_raw;
 
-    -- Supplier Info
-    SupplierName        NVARCHAR(200) NULL
-);
-GO
+		-- Bulk insert from CSV
+		BULK INSERT bronze.sales_raw
+		FROM 'C:\SQLData\sales_data.csv'
+		WITH 
+		(
+			FIRSTROW = 2,                 -- Skip header row
+			FIELDTERMINATOR = ',',        -- Column delimiter
+			ROWTERMINATOR = '0x0a',       -- Line feed (\n)
+			TABLOCK,
+			CODEPAGE = '65001'            -- UTF-8 support
+		);
 
-PRINT 'Bronze layer table [bronze.sales_raw] created successfully.';
+		PRINT ' Bronze Load Completed Successfully.';
+	SET @batch_end_time = GETDATE();
+			PRINT '=========================================='
+			PRINT 'Loading Bronze Layer is Completed';
+			PRINT '   - Total Load Duration: ' + CAST(DATEDIFF(SECOND, @batch_start_time, @batch_end_time) AS NVARCHAR) + ' seconds';
+			PRINT '=========================================='
+		END TRY
+		BEGIN CATCH
+			PRINT '=========================================='
+			PRINT 'ERROR OCCURED DURING LOADING BRONZE LAYER'
+			PRINT 'Error Message' + ERROR_MESSAGE();
+			PRINT 'Error Message' + CAST (ERROR_NUMBER() AS NVARCHAR);
+			PRINT 'Error Message' + CAST (ERROR_STATE() AS NVARCHAR);
+			PRINT '=========================================='
+		END CATCH
+	END
