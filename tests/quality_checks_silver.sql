@@ -12,6 +12,7 @@ CREATE TABLE silver.QualityReport (
     IssueCount INT NULL,
     Details NVARCHAR(500) NULL,
     RunDate DATETIME DEFAULT GETDATE()
+    ADD RunID INT
 );
 
 
