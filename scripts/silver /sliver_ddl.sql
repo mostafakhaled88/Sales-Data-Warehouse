@@ -1,107 +1,125 @@
+/********************************************************************************************
+  File: silver_ddl.sql
+  Layer: Silver (Cleansed Data)
+  Project: Sales Data Warehouse (SalesDWH)
+  Description:
+      Defines all tables for the Silver Layer:
+      - DimDate
+      - DimCustomer
+      - DimProduct
+      - FactSales
+********************************************************************************************/
+
 USE SalesDWH;
 GO
 
--------------------------------------------------------------------
--- 1. Drop Existing Tables (Order matters due to FKs)
--------------------------------------------------------------------
-IF OBJECT_ID('SalesDWH.silver.FactSales', 'U') IS NOT NULL
-    DROP TABLE SalesDWH.silver.FactSales;
-IF OBJECT_ID('SalesDWH.silver.DimCustomer', 'U') IS NOT NULL
-    DROP TABLE SalesDWH.silver.DimCustomer;
-IF OBJECT_ID('SalesDWH.silver.DimProduct', 'U') IS NOT NULL
-    DROP TABLE SalesDWH.silver.DimProduct;
-IF OBJECT_ID('SalesDWH.silver.DimDate', 'U') IS NOT NULL
-    DROP TABLE SalesDWH.silver.DimDate;
+/********************************************************************************************
+  1. Drop Existing Tables (Order matters due to Foreign Keys)
+********************************************************************************************/
+IF OBJECT_ID('SalesDWH.silver.fact_sales', 'U') IS NOT NULL
+    DROP TABLE SalesDWH.silver.fact_sales;
+IF OBJECT_ID('SalesDWH.silver.dim_customer', 'U') IS NOT NULL
+    DROP TABLE SalesDWH.silver.dim_customer;
+IF OBJECT_ID('SalesDWH.silver.dim_product', 'U') IS NOT NULL
+    DROP TABLE SalesDWH.silver.dim_product;
+IF OBJECT_ID('SalesDWH.silver.dim_date', 'U') IS NOT NULL
+    DROP TABLE SalesDWH.silver.dim_date;
 GO
 
--------------------------------------------------------------------
--- 2. DimDate
--------------------------------------------------------------------
-CREATE TABLE SalesDWH.silver.DimDate
+
+/********************************************************************************************
+  2. Dimension: dim_date
+********************************************************************************************/
+CREATE TABLE SalesDWH.silver.dim_date
 (
-    DateID INT IDENTITY(1,1) PRIMARY KEY,
-    FullDate DATE,
-    Day INT,
-    Month_ID INT,
-    MonthName NVARCHAR(20),
-    Qtr_ID INT,
-    QuarterName NVARCHAR(10),
-    Year_ID INT,
-    YearName NVARCHAR(10),
-    dwh_create_date DATETIME DEFAULT GETDATE()
+    date_id             INT IDENTITY(1,1) PRIMARY KEY,
+    full_date           DATE NOT NULL,
+    day_number          TINYINT,
+    month_number        TINYINT,
+    month_name          NVARCHAR(20),
+    quarter_name        NVARCHAR(10),
+    year_number         SMALLINT,
+    dwh_create_date     DATETIME DEFAULT GETDATE()
 );
 GO
 
--------------------------------------------------------------------
--- 3. DimCustomer
--------------------------------------------------------------------
-CREATE TABLE SalesDWH.silver.DimCustomer
+
+/********************************************************************************************
+  3. Dimension: dim_customer
+********************************************************************************************/
+CREATE TABLE SalesDWH.silver.dim_customer
 (
-    CustomerID INT IDENTITY(1,1) PRIMARY KEY,
-    CustomerName NVARCHAR(255),
-    ContactFirstName NVARCHAR(100),
-    ContactLastName NVARCHAR(100),
-    Phone NVARCHAR(50),
-    AddressLine1 NVARCHAR(255),
-    City NVARCHAR(100),
-    State NVARCHAR(100),
-    PostalCode NVARCHAR(20),
-    Country NVARCHAR(100),
-    Territory NVARCHAR(50),
-    dwh_create_date DATETIME DEFAULT GETDATE()
+    customer_id         INT IDENTITY(1,1) PRIMARY KEY,
+    customer_name       NVARCHAR(255),
+    contact_first_name  NVARCHAR(100),
+    contact_last_name   NVARCHAR(100),
+    phone               NVARCHAR(50),
+    address_line        NVARCHAR(255),
+    city                NVARCHAR(100),
+    state               NVARCHAR(100),
+    postal_code         NVARCHAR(20),
+    country             NVARCHAR(100),
+    territory           NVARCHAR(50),
+    dwh_create_date     DATETIME DEFAULT GETDATE()
 );
 GO
 
--------------------------------------------------------------------
--- 4. DimProduct
--------------------------------------------------------------------
-CREATE TABLE SalesDWH.silver.DimProduct
+
+/********************************************************************************************
+  4. Dimension: dim_product
+********************************************************************************************/
+CREATE TABLE SalesDWH.silver.dim_product
 (
-    ProductID INT IDENTITY(1,1) PRIMARY KEY,
-    ProductCode NVARCHAR(50),
-    ProductLine NVARCHAR(100),
-    MSRP DECIMAL(10,2),
-    dwh_create_date DATETIME DEFAULT GETDATE()
+    product_id          INT IDENTITY(1,1) PRIMARY KEY,
+    product_code        NVARCHAR(50),
+    product_line        NVARCHAR(100),
+    msrp                DECIMAL(10,2),
+    dwh_create_date     DATETIME DEFAULT GETDATE()
 );
 GO
 
--------------------------------------------------------------------
--- 5. FactSales (with FKs to all dimensions)
--------------------------------------------------------------------
-CREATE TABLE SalesDWH.silver.FactSales
+
+/********************************************************************************************
+  5. Fact Table: fact_sales
+********************************************************************************************/
+CREATE TABLE SalesDWH.silver.fact_sales
 (
-    SalesID INT IDENTITY(1,1) PRIMARY KEY,
-    OrderNumber INT,
-    OrderDate DATETIME,
-    Status NVARCHAR(50),
-    QuantityOrdered INT,
-    PriceEach DECIMAL(10,2),
-    Sales DECIMAL(18,2),
-    DealSize NVARCHAR(20),
+    sales_id            INT IDENTITY(1,1) PRIMARY KEY,
+    order_number        INT,
+    order_date          DATETIME,
+    status              NVARCHAR(50),
+    quantity_ordered    INT,
+    price_each          DECIMAL(10,2),
+    sales_amount        DECIMAL(18,2),
+    deal_size           NVARCHAR(20),
 
-    -- Foreign Key Columns
-    CustomerID INT,
-    ProductID INT,
-    DateID INT,         -- Connects to DimDate
-    Qtr_ID INT,
-    Month_ID INT,
-    Year_ID INT,
+    -- Foreign Keys
+    customer_id         INT,
+    product_id          INT,
+    date_id             INT,
 
-    dwh_create_date DATETIME DEFAULT GETDATE(),
+    dwh_create_date     DATETIME DEFAULT GETDATE(),
 
-    -------------------------------------------------------------------
-    -- Foreign Key Constraints
-    -------------------------------------------------------------------
-    CONSTRAINT FK_FactSales_DimCustomer
-        FOREIGN KEY (CustomerID)
-        REFERENCES SalesDWH.silver.DimCustomer(CustomerID),
+    /*******************************************************
+      Foreign Key Constraints
+    *******************************************************/
+    CONSTRAINT fk_fact_sales_customer
+        FOREIGN KEY (customer_id)
+        REFERENCES SalesDWH.silver.dim_customer(customer_id),
 
-    CONSTRAINT FK_FactSales_DimProduct
-        FOREIGN KEY (ProductID)
-        REFERENCES SalesDWH.silver.DimProduct(ProductID),
+    CONSTRAINT fk_fact_sales_product
+        FOREIGN KEY (product_id)
+        REFERENCES SalesDWH.silver.dim_product(product_id),
 
-    CONSTRAINT FK_FactSales_DimDate
-        FOREIGN KEY (DateID)
-        REFERENCES SalesDWH.silver.DimDate(DateID)
+    CONSTRAINT fk_fact_sales_date
+        FOREIGN KEY (date_id)
+        REFERENCES SalesDWH.silver.dim_date(date_id)
 );
+GO
+
+
+/********************************************************************************************
+  End of Script
+********************************************************************************************/
+PRINT ' Silver layer DDL created successfully.';
 GO
