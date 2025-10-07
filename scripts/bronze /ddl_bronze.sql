@@ -34,7 +34,6 @@ CREATE TABLE [SalesDWH].[bronze].[sales_raw] (
     quantity_ordered     INT,
     price_each           DECIMAL(10,2),
     order_line_number    INT,
-    sales                DECIMAL(12,2),
     order_date           VARCHAR(50),
     status               VARCHAR(50),
     qtr_id               INT,
