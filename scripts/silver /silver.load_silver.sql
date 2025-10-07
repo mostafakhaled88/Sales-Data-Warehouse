@@ -200,7 +200,7 @@ BEGIN
             LTRIM(RTRIM(b.STATUS)),
             b.quantity_ordered,
             b.price_each,
-            b.SALES,
+             b.quantity_ordered *b.price_each AS sales_amount ,
             LTRIM(RTRIM(b.deal_size)),
             c.customer_id,
             p.product_id,
