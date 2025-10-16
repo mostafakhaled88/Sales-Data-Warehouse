@@ -50,7 +50,7 @@ BEGIN
         PRINT ' Loading data from CSV file into [bronze].[sales_raw]...';
 
         BULK INSERT [SalesDWH].[bronze].[sales_raw]
-        FROM 'C:\SQLData\sales_data_cleaned.csv'
+        FROM 'C:\SQLData\sales_data.csv'
         WITH (
             FORMAT = 'CSV',
             FIRSTROW = 2,
@@ -89,4 +89,3 @@ BEGIN
     END CATCH
 END;
 GO
-
