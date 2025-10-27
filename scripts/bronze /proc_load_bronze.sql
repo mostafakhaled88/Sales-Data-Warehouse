@@ -12,7 +12,7 @@
       None.
 
   Usage Example:
-      EXEC bronze.load_bronze;
+     EXEC bronze.load_bronze @FilePath = 'C:\SQLData\sales_data.csv';
 ===============================================================================*/
 
 USE SalesDWH;
