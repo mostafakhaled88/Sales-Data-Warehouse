@@ -147,7 +147,7 @@ BEGIN
         -- 6. Validate & Load FactSales
         -------------------------------------------------------------------
         PRINT '→ Validating data before FactSales load...';
-        INSERT INTO silver.load_errors (table_name, error_message, record_data)
+        INSERT INTO load_errors (table_name, error_message, record_data)
         SELECT 'bronze.sales_raw',
                'Invalid or missing key field (order_number, order_date, customer_name, product_code)',
                CONCAT('OrderNumber=', order_number, ', OrderDate=', order_date)
@@ -204,7 +204,7 @@ BEGIN
         SET @rowcount = (SELECT COUNT(*) FROM silver.fact_sales);
         SET @end_time = GETDATE();
 
-        INSERT INTO silver.load_audit (load_start, load_end, load_mode, table_name, rows_inserted, status)
+        INSERT INTO load_audit (load_start, load_end, load_mode, table_name, rows_inserted, status)
         VALUES (@start_time, @end_time, @LoadMode, 'silver.fact_sales', @rowcount, 'SUCCESS');
 
         PRINT '✅ Silver Layer Load Completed Successfully!';
@@ -218,11 +218,8 @@ BEGIN
 
         PRINT '❌ ERROR during Silver Load: ' + @msg;
 
-        INSERT INTO silver.load_audit (load_start, load_end, load_mode, table_name, rows_inserted, status, error_message)
+        INSERT INTO load_audit (load_start, load_end, load_mode, table_name, rows_inserted, status, error_message)
         VALUES (@start_time, @end_time, @LoadMode, 'silver.fact_sales', 0, 'FAILED', @msg);
     END CATCH
 END;
 GO
-
-
-
