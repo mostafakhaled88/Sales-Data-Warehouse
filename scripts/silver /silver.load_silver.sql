@@ -32,35 +32,54 @@ CREATE PROCEDURE silver.load_silver
 AS
 BEGIN
     SET NOCOUNT ON;
-
-    -------------------------------------------------------------------
-    -- 0. Initialize variables
-    -------------------------------------------------------------------
-    DECLARE @start_time DATETIME = GETDATE(),
-            @rowcount INT = 0,
-            @msg NVARCHAR(4000);
+    DECLARE 
+        @start_time DATETIME = GETDATE(),
+        @end_time DATETIME,
+        @rowcount INT = 0,
+        @msg NVARCHAR(4000);
 
     PRINT '================================================';
     PRINT '⚙️  Starting Silver Layer Load (' + @LoadMode + ' mode)';
     PRINT '================================================';
 
     BEGIN TRY
-      
         -------------------------------------------------------------------
-        -- 2. Drop Foreign Key Constraints (for reload)
+        -- 0. Ensure Audit & Error Tables Exist
+        -------------------------------------------------------------------
+        IF OBJECT_ID('silver.load_audit') IS NULL
+        CREATE TABLE silver.load_audit (
+            audit_id INT IDENTITY(1,1) PRIMARY KEY,
+            load_start DATETIME,
+            load_end DATETIME,
+            load_mode NVARCHAR(20),
+            table_name NVARCHAR(100),
+            rows_inserted INT,
+            status NVARCHAR(20),
+            error_message NVARCHAR(4000)
+        );
+
+        IF OBJECT_ID('silver.load_errors') IS NULL
+        CREATE TABLE silver.load_errors (
+            error_id INT IDENTITY(1,1) PRIMARY KEY,
+            table_name NVARCHAR(100),
+            error_message NVARCHAR(4000),
+            record_data NVARCHAR(MAX),
+            error_time DATETIME DEFAULT GETDATE()
+        );
+
+        -------------------------------------------------------------------
+        -- 1. Drop Constraints Before Load
         -------------------------------------------------------------------
         PRINT '→ Dropping Foreign Key Constraints...';
         IF EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = 'fk_fact_sales_customer')
             ALTER TABLE silver.fact_sales DROP CONSTRAINT fk_fact_sales_customer;
-
         IF EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = 'fk_fact_sales_product')
             ALTER TABLE silver.fact_sales DROP CONSTRAINT fk_fact_sales_product;
-
         IF EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = 'fk_fact_sales_date')
             ALTER TABLE silver.fact_sales DROP CONSTRAINT fk_fact_sales_date;
 
         -------------------------------------------------------------------
-        -- 3. Handle FULL or INCREMENTAL load
+        -- 2. FULL or INCREMENTAL Load
         -------------------------------------------------------------------
         IF UPPER(@LoadMode) = 'FULL'
         BEGIN
@@ -76,10 +95,9 @@ BEGIN
         END
 
         -------------------------------------------------------------------
-        -- 4. Load DimDate
+        -- 3. Load DimDate
         -------------------------------------------------------------------
         PRINT '→ Loading DimDate...';
-
         DECLARE @MinDate DATE, @MaxDate DATE;
         SELECT 
             @MinDate = MIN(TRY_CAST(order_date AS DATE)),
@@ -107,7 +125,7 @@ BEGIN
         OPTION (MAXRECURSION 0);
 
         -------------------------------------------------------------------
-        -- 5. Load DimCustomer
+        -- 4. Load DimCustomer
         -------------------------------------------------------------------
         PRINT '→ Loading DimCustomer...';
         INSERT INTO silver.dim_customer (
@@ -118,7 +136,7 @@ BEGIN
             REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(b.customer_name)), '+', ''), '(', ''), ')', ''), '"', ''), '.', ''), ',', ''), '/', '') AS customer_name,
             REPLACE(LTRIM(RTRIM(b.contact_first_name)), '-', '') AS contact_first_name,
             REPLACE(LTRIM(RTRIM(b.contact_last_name)), '-', '') AS contact_last_name,
-            dbo.KeepDigits(b.PHONE) AS phone,
+            dbo.KeepDigits(b.phone) AS phone,
             LTRIM(RTRIM(b.address_line1)) AS address_line,
             LTRIM(RTRIM(b.city)) AS city,
             ISNULL(NULLIF(UPPER(LTRIM(RTRIM(b.state))), ''), 'UNKNOWN') AS state,
@@ -135,7 +153,7 @@ BEGIN
           AND NOT EXISTS (SELECT 1 FROM silver.dim_customer c WHERE c.customer_name = b.customer_name);
 
         -------------------------------------------------------------------
-        -- 6. Load DimProduct
+        -- 5. Load DimProduct
         -------------------------------------------------------------------
         PRINT '→ Loading DimProduct...';
         INSERT INTO silver.dim_product (product_code, product_line, msrp)
@@ -148,7 +166,7 @@ BEGIN
           AND NOT EXISTS (SELECT 1 FROM silver.dim_product p WHERE p.product_code = b.product_code);
 
         -------------------------------------------------------------------
-        -- 7. Validate and Load FactSales
+        -- 6. Validate & Load FactSales
         -------------------------------------------------------------------
         PRINT '→ Validating data before FactSales load...';
         INSERT INTO silver.load_errors (table_name, error_message, record_data)
@@ -156,10 +174,7 @@ BEGIN
                'Invalid or missing key field (order_number, order_date, customer_name, product_code)',
                CONCAT('OrderNumber=', order_number, ', OrderDate=', order_date)
         FROM bronze.sales_raw
-        WHERE order_number IS NULL
-           OR order_date IS NULL
-           OR customer_name IS NULL
-           OR product_code IS NULL;
+        WHERE order_number IS NULL OR order_date IS NULL OR customer_name IS NULL OR product_code IS NULL;
 
         PRINT '→ Loading FactSales...';
         INSERT INTO silver.fact_sales (
@@ -182,12 +197,10 @@ BEGIN
         INNER JOIN silver.dim_product p ON p.product_code = LTRIM(RTRIM(b.product_code))
         WHERE b.quantity_ordered > 0 
           AND b.price_each > 0
-          AND NOT EXISTS (
-              SELECT 1 FROM silver.fact_sales f WHERE f.order_number = b.order_number
-          );
+          AND NOT EXISTS (SELECT 1 FROM silver.fact_sales f WHERE f.order_number = b.order_number);
 
         -------------------------------------------------------------------
-        -- 8. Map DateID
+        -- 7. Map DateID
         -------------------------------------------------------------------
         PRINT '→ Linking FactSales with DimDate...';
         UPDATE f
@@ -197,23 +210,24 @@ BEGIN
         WHERE f.date_id IS NULL;
 
         -------------------------------------------------------------------
-        -- 9. Recreate Foreign Keys & Indexes
+        -- 8. Recreate Foreign Keys
         -------------------------------------------------------------------
         PRINT '→ Recreating Constraints & Indexes...';
         ALTER TABLE silver.fact_sales
             ADD CONSTRAINT fk_fact_sales_customer FOREIGN KEY (customer_id) REFERENCES silver.dim_customer(customer_id);
-
         ALTER TABLE silver.fact_sales
             ADD CONSTRAINT fk_fact_sales_product FOREIGN KEY (product_id) REFERENCES silver.dim_product(product_id);
-
         ALTER TABLE silver.fact_sales
             ADD CONSTRAINT fk_fact_sales_date FOREIGN KEY (date_id) REFERENCES silver.dim_date(date_id);
 
         -------------------------------------------------------------------
-        -- 10. Audit Logging
+        -- 9. Audit Logging
         -------------------------------------------------------------------
         SET @rowcount = (SELECT COUNT(*) FROM silver.fact_sales);
-       
+        SET @end_time = GETDATE();
+
+        INSERT INTO silver.load_audit (load_start, load_end, load_mode, table_name, rows_inserted, status)
+        VALUES (@start_time, @end_time, @LoadMode, 'silver.fact_sales', @rowcount, 'SUCCESS');
 
         PRINT '✅ Silver Layer Load Completed Successfully!';
         PRINT '   → Total Rows in FactSales: ' + CAST(@rowcount AS NVARCHAR);
@@ -221,7 +235,18 @@ BEGIN
     END TRY
 
     BEGIN CATCH
-        
+        SET @msg = ERROR_MESSAGE();
+        SET @end_time = GETDATE();
+
+        PRINT '❌ ERROR during Silver Load: ' + @msg;
+
+        INSERT INTO silver.load_audit (load_start, load_end, load_mode, table_name, rows_inserted, status, error_message)
+        VALUES (@start_time, @end_time, @LoadMode, 'silver.fact_sales', 0, 'FAILED', @msg);
     END CATCH
+END;
+GO
+
+
+
 END;
 GO
