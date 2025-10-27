@@ -44,3 +44,30 @@ CREATE SCHEMA gold;
 GO
 
 PRINT ' DataWarehouse initialized with bronze, silver, and gold schemas.';
+
+        --  Ensure Audit & Error Tables Exist
+        
+        IF OBJECT_ID('load_audit') IS NULL
+        CREATE TABLE load_audit (
+            audit_id INT IDENTITY(1,1) PRIMARY KEY,
+            load_start DATETIME,
+            load_end DATETIME,
+            load_mode NVARCHAR(20),
+            table_name NVARCHAR(100),
+            rows_inserted INT,
+            status NVARCHAR(20),
+            error_message NVARCHAR(4000)
+  
+        );
+
+        IF OBJECT_ID('load_errors') IS NULL
+        CREATE TABLE load_errors (
+            error_id INT IDENTITY(1,1) PRIMARY KEY,
+            table_name NVARCHAR(100),
+            error_message NVARCHAR(4000),
+            record_data NVARCHAR(MAX),
+            error_time DATETIME DEFAULT GETDATE()
+        );
+
+PRINT ' load_audit and load_errors created';
+
