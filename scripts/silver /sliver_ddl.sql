@@ -129,6 +129,7 @@ GO
             rows_inserted INT,
             status NVARCHAR(20),
             error_message NVARCHAR(4000)
+  
         );
 
         IF OBJECT_ID('silver.load_errors') IS NULL
