@@ -97,7 +97,7 @@ CREATE TABLE SalesDWH.silver.fact_sales
     customer_id         INT,
     product_id          INT,
     date_id             INT,
-
+	row_hash VARBINARY(20) NULL,
     dwh_create_date     DATETIME DEFAULT GETDATE(),
 
     /*******************************************************
