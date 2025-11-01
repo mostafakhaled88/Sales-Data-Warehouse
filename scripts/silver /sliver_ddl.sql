@@ -1,6 +1,6 @@
 /********************************************************************************************
   File: silver_ddl.sql
-  Layer: Silver (Cleansed Data)
+  Layer: Silver 
   Project: Sales Data Warehouse (SalesDWH)
   Description:
       Defines all tables for the Silver Layer:
@@ -86,7 +86,6 @@ CREATE TABLE SalesDWH.silver.fact_sales
 (
     sales_id            INT IDENTITY(1,1) PRIMARY KEY,
     order_number        INT,
-    order_date          DATETIME,
     status              NVARCHAR(50),
     quantity_ordered    INT,
     price_each          DECIMAL(10,2),
