@@ -1,266 +1,270 @@
 /*===============================================================================
-  Stored Procedure: bronze.load_bronze
-  ===============================================================================
-  Purpose:
-      Loads data into the Bronze Layer (incremental or full) from external CSV files.
+Stored Procedure: bronze.load_bronze
+====================================
 
-  Features:
-      - Supports FULL and INCREMENTAL load modes.
-      - Uses a temporary staging table for comparison (with a transient index).
-      - Replaces NOT EXISTS with indexed LEFT JOIN anti-join for performance.
-      - Displays a clean, structured summary (UNION ALL format).
-      - Logs all operations in load_audit and load_errors tables.
+Purpose:
+Loads data into the Bronze Layer (incremental or full) from external CSV files.
 
-  Usage:
-      EXEC bronze.load_bronze @FilePath = 'C:\SQLData\sales_data.csv', @LoadMode = 'FULL';
-      EXEC bronze.load_bronze @FilePath = 'C:\SQLData\sales_data.csv', @LoadMode = 'INCR';
+Features:
+- FULL and INCREMENTAL load modes.
+- Uses hash-based comparison for fast incremental loads.
+- Creates transient indexes for faster staging joins.
+- Logs all operations to load_audit and load_errors tables.
+- Enhanced BULK INSERT for large data (batch size, error tolerance).
+
+Usage:
+EXEC bronze.load_bronze @FilePath = 'C:\SQLData\sales_data.csv', @LoadMode = 'FULL';
+EXEC bronze.load_bronze @FilePath = 'C:\SQLData\sales_data.csv', @LoadMode = 'INCR';
 ===============================================================================*/
 
 USE SalesDWH;
 GO
 
 IF OBJECT_ID('bronze.load_bronze', 'P') IS NOT NULL
-    DROP PROCEDURE bronze.load_bronze;
+DROP PROCEDURE bronze.load_bronze;
 GO
 
 CREATE PROCEDURE bronze.load_bronze
-    @FilePath NVARCHAR(255),
-    @LoadMode NVARCHAR(10) = 'INCR'
+@FilePath NVARCHAR(255),
+@LoadMode NVARCHAR(10) = 'INCR'
 AS
 BEGIN
-    SET NOCOUNT ON;
+SET NOCOUNT ON;
 
-    DECLARE 
-        @batch_start_time DATETIME = GETDATE(),
-        @batch_end_time DATETIME,
-        @rows_before_load INT = 0,
-        @rows_in_file INT = 0,
-        @rows_inserted INT = 0,
-        @rows_existing INT = 0,
-        @rows_total INT = 0,
-        @duration_seconds INT,
-        @error_message NVARCHAR(MAX),
-        @load_status NVARCHAR(20) = 'SUCCESS',
-        @sql NVARCHAR(MAX);
 
-    BEGIN TRY
-        PRINT '============================================================';
-        PRINT 'Starting Bronze Layer Load (' + @LoadMode + ' Mode)';
-        PRINT '============================================================';
-        PRINT 'File Path: ' + @FilePath;
-        PRINT '------------------------------------------------------------';
+DECLARE 
+    @batch_start_time DATETIME = GETDATE(),
+    @batch_end_time DATETIME,
+    @rows_before_load INT = 0,
+    @rows_in_file INT = 0,
+    @rows_inserted INT = 0,
+    @rows_existing INT = 0,
+    @rows_total INT = 0,
+    @duration_seconds INT,
+    @error_message NVARCHAR(MAX),
+    @load_status NVARCHAR(20) = 'SUCCESS',
+    @sql NVARCHAR(MAX);
 
-        -----------------------------------------------------------------------
-        -- 1. Validate Parameters
-        -----------------------------------------------------------------------
-        IF @FilePath IS NULL OR LTRIM(RTRIM(@FilePath)) = ''
-            THROW 50001, 'File path cannot be NULL or empty.', 1;
+BEGIN TRY
+    PRINT '============================================================';
+    PRINT 'Starting Bronze Layer Load (' + @LoadMode + ' Mode)';
+    PRINT '============================================================';
+    PRINT 'File Path: ' + @FilePath;
+    PRINT '------------------------------------------------------------';
 
-        IF @LoadMode NOT IN ('FULL', 'INCR')
-            THROW 50002, 'Invalid LoadMode. Use FULL or INCR.', 1;
+    -----------------------------------------------------------------------
+    -- 1. Validate Parameters
+    -----------------------------------------------------------------------
+    IF @FilePath IS NULL OR LTRIM(RTRIM(@FilePath)) = ''
+        THROW 50001, 'File path cannot be NULL or empty.', 1;
 
-        -----------------------------------------------------------------------
-        -- 2. Capture current row count before load
-        -----------------------------------------------------------------------
-        SELECT @rows_before_load = COUNT(*) FROM bronze.sales_raw;
+    IF @LoadMode NOT IN ('FULL', 'INCR')
+        THROW 50002, 'Invalid LoadMode. Use FULL or INCR.', 1;
 
-        -----------------------------------------------------------------------
-        -- 3. Handle FULL load truncation
-        -----------------------------------------------------------------------
-        IF @LoadMode = 'FULL'
-        BEGIN
-            PRINT 'Performing FULL LOAD: Truncating [bronze].[sales_raw]...';
-            TRUNCATE TABLE bronze.sales_raw;
-            SET @rows_before_load = 0;
-        END;
+    -----------------------------------------------------------------------
+    -- 2. Capture current row count
+    -----------------------------------------------------------------------
+    SELECT @rows_before_load = COUNT(*) FROM bronze.sales_raw;
 
-        -----------------------------------------------------------------------
-        -- 4. Load CSV into staging table
-        -----------------------------------------------------------------------
-        PRINT 'Loading data from CSV into temporary staging table...';
+    -----------------------------------------------------------------------
+    -- 3. FULL Load - Truncate
+    -----------------------------------------------------------------------
+    IF @LoadMode = 'FULL'
+    BEGIN
+        PRINT 'Performing FULL LOAD: Truncating [bronze].[sales_raw]...';
+        TRUNCATE TABLE bronze.sales_raw;
+        SET @rows_before_load = 0;
+    END;
 
-        IF OBJECT_ID('tempdb..#staging_sales_raw') IS NOT NULL
-            DROP TABLE #staging_sales_raw;
+    -----------------------------------------------------------------------
+    -- 4. Load CSV into staging
+    -----------------------------------------------------------------------
+    PRINT 'Loading data into staging table...';
 
-        CREATE TABLE #staging_sales_raw (
-            order_number         INT NULL,
-            quantity_ordered     INT NULL,
-            price_each           DECIMAL(10,2) NULL,
-            order_line_number    INT NULL,
-            order_date           VARCHAR(50) NULL,
-            status               VARCHAR(50) NULL,
-            qtr_id               INT NULL,
-            month_id             INT NULL,
-            year_id              INT NULL,
-            product_line         VARCHAR(100) NULL,
-            msrp                 INT NULL,
-            product_code         VARCHAR(50) NULL,
-            customer_name        VARCHAR(255) NULL,
-            phone                VARCHAR(50) NULL,
-            address_line1        VARCHAR(255) NULL,
-            address_line2        VARCHAR(255) NULL,
-            city                 VARCHAR(100) NULL,
-            state                VARCHAR(100) NULL,
-            postal_code          VARCHAR(20) NULL,
-            country              VARCHAR(100) NULL,
-            territory            VARCHAR(100) NULL,
-            contact_last_name    VARCHAR(100) NULL,
-            contact_first_name   VARCHAR(100) NULL,
-            deal_size            VARCHAR(50) NULL
+    IF OBJECT_ID('tempdb..#staging_sales_raw') IS NOT NULL
+        DROP TABLE #staging_sales_raw;
+
+    CREATE TABLE #staging_sales_raw (
+        order_number         INT NULL,
+        quantity_ordered     INT NULL,
+        price_each           DECIMAL(10,2) NULL,
+        order_line_number    INT NULL,
+        order_date           VARCHAR(50) NULL,
+        status               VARCHAR(50) NULL,
+        qtr_id               INT NULL,
+        month_id             INT NULL,
+        year_id              INT NULL,
+        product_line         VARCHAR(100) NULL,
+        msrp                 INT NULL,
+        product_code         VARCHAR(50) NULL,
+        customer_name        VARCHAR(255) NULL,
+        phone                VARCHAR(50) NULL,
+        address_line1        VARCHAR(255) NULL,
+        address_line2        VARCHAR(255) NULL,
+        city                 VARCHAR(100) NULL,
+        state                VARCHAR(100) NULL,
+        postal_code          VARCHAR(20) NULL,
+        country              VARCHAR(100) NULL,
+        territory            VARCHAR(100) NULL,
+        contact_last_name    VARCHAR(100) NULL,
+        contact_first_name   VARCHAR(100) NULL,
+        deal_size            VARCHAR(50) NULL
+    );
+
+    SET @sql = N'
+        BULK INSERT #staging_sales_raw
+        FROM ''' + @FilePath + N'''
+        WITH (
+            FORMAT = ''CSV'',
+            FIRSTROW = 2,
+            FIELDTERMINATOR = '','',
+            ROWTERMINATOR = ''\n'',
+            BATCHSIZE = 50000,
+            MAXERRORS = 0,
+            TABLOCK
+        );';
+    EXEC sp_executesql @sql;
+
+    SELECT @rows_in_file = COUNT(*) FROM #staging_sales_raw;
+
+    PRINT 'Rows Found in File: ' + CAST(@rows_in_file AS NVARCHAR(20));
+
+    -----------------------------------------------------------------------
+    -- 5. Compute Hash Column in staging
+    -----------------------------------------------------------------------
+    ALTER TABLE #staging_sales_raw
+    ADD row_hash AS
+        CONVERT(VARCHAR(32),
+            HASHBYTES('MD5',
+                CONCAT(
+                    order_number, '|',
+                    order_line_number, '|',
+                    price_each, '|',
+                    quantity_ordered, '|',
+                    product_code, '|',
+                    customer_name
+                )
+            ), 2
         );
 
-        SET @sql = N'
-            BULK INSERT #staging_sales_raw
-            FROM ''' + @FilePath + N'''
-            WITH (
-                FORMAT = ''CSV'',
-                FIRSTROW = 2,
-                FIELDTERMINATOR = '','',
-                ROWTERMINATOR = ''\n'',
-                TABLOCK
-            );';
-        EXEC sp_executesql @sql;
+    -----------------------------------------------------------------------
+    -- 6. Create transient index for join speed
+    -----------------------------------------------------------------------
+    IF @rows_in_file > 0
+        EXEC('CREATE NONCLUSTERED INDEX IX_stg_rowhash ON #staging_sales_raw(row_hash);');
 
-        SELECT @rows_in_file = COUNT(*) FROM #staging_sales_raw;
+    -----------------------------------------------------------------------
+    -- 7. Incremental vs Full Logic
+    -----------------------------------------------------------------------
+    IF @LoadMode = 'INCR'
+    BEGIN
+        PRINT 'Performing INCREMENTAL LOAD using hash comparison...';
 
-        PRINT 'Rows Found in File: ' + CAST(@rows_in_file AS NVARCHAR(20));
-        PRINT '------------------------------------------------------------';
+        INSERT INTO bronze.sales_raw (
+            order_number, quantity_ordered, price_each, order_line_number,
+            order_date, status, qtr_id, month_id, year_id, product_line,
+            msrp, product_code, customer_name, phone, address_line1, address_line2,
+            city, state, postal_code, country, territory,
+            contact_last_name, contact_first_name, deal_size, load_dtm
+        )
+        SELECT
+            s.order_number, s.quantity_ordered, s.price_each, s.order_line_number,
+            s.order_date, s.status, s.qtr_id, s.month_id, s.year_id, s.product_line,
+            s.msrp, s.product_code, s.customer_name, s.phone, s.address_line1, s.address_line2,
+            s.city, s.state, s.postal_code, s.country, s.territory,
+            s.contact_last_name, s.contact_first_name, s.deal_size, GETDATE()
+        FROM #staging_sales_raw s
+        LEFT JOIN bronze.sales_raw b
+    ON b.row_hash = s.row_hash
+   OR (
+       b.order_number = s.order_number
+       AND b.order_line_number = s.order_line_number
+       AND b.product_code = s.product_code
+   )
+WHERE b.order_number IS NULL;
 
-        -----------------------------------------------------------------------
-        -- 4.1 Create a transient index on staging for faster joins (only if rows > 0)
-        -----------------------------------------------------------------------
-        IF @rows_in_file > 0
-        BEGIN
-            -- create index to help the join/anti-join
-            EXEC('CREATE NONCLUSTERED INDEX IX_stg_order_line ON #staging_sales_raw(order_number, order_line_number);');
-        END
 
-        -----------------------------------------------------------------------
-        -- 5. Load Logic: optimized anti-join using LEFT JOIN + indexed staging
-        -----------------------------------------------------------------------
-        IF @LoadMode = 'INCR'
-        BEGIN
-            PRINT 'Performing INCREMENTAL LOAD: Inserting only new records (indexed anti-join)...';
+        SET @rows_inserted = @@ROWCOUNT;
+        SET @rows_existing = @rows_in_file - @rows_inserted;
+    END
+    ELSE
+    BEGIN
+        PRINT 'Performing FULL LOAD: inserting all rows...';
 
-            INSERT INTO bronze.sales_raw (
-                order_number, quantity_ordered, price_each, order_line_number,
-                order_date, status, qtr_id, month_id, year_id, product_line,
-                msrp, product_code, customer_name, phone, address_line1, address_line2,
-                city, state, postal_code, country, territory,
-                contact_last_name, contact_first_name, deal_size, load_dtm
-            )
-            SELECT
-                s.order_number, s.quantity_ordered, s.price_each, s.order_line_number,
-                s.order_date, s.status, s.qtr_id, s.month_id, s.year_id, s.product_line,
-                s.msrp, s.product_code, s.customer_name, s.phone, s.address_line1, s.address_line2,
-                s.city, s.state, s.postal_code, s.country, s.territory,
-                s.contact_last_name, s.contact_first_name, s.deal_size, GETDATE()
-            FROM #staging_sales_raw s
-            LEFT JOIN bronze.sales_raw b
-                ON b.order_number = s.order_number
-               AND b.order_line_number = s.order_line_number
-            WHERE b.order_number IS NULL;  -- anti-join: only rows not present in target
+        INSERT INTO bronze.sales_raw (
+            order_number, quantity_ordered, price_each, order_line_number,
+            order_date, status, qtr_id, month_id, year_id, product_line,
+            msrp, product_code, customer_name, phone, address_line1, address_line2,
+            city, state, postal_code, country, territory,
+            contact_last_name, contact_first_name, deal_size, load_dtm
+        )
+        SELECT
+            s.order_number, s.quantity_ordered, s.price_each, s.order_line_number,
+            s.order_date, s.status, s.qtr_id, s.month_id, s.year_id, s.product_line,
+            s.msrp, s.product_code, s.customer_name, s.phone, s.address_line1, s.address_line2,
+            s.city, s.state, s.postal_code, s.country, s.territory,
+            s.contact_last_name, s.contact_first_name, s.deal_size, GETDATE()
+        FROM #staging_sales_raw s;
 
-            SET @rows_inserted = @@ROWCOUNT;
-            SET @rows_existing = @rows_in_file - @rows_inserted;
-        END
-        ELSE
-        BEGIN
-            PRINT 'Performing FULL LOAD: Inserting all rows...';
+        SET @rows_inserted = @@ROWCOUNT;
+        SET @rows_existing = 0;
+    END;
 
-            INSERT INTO bronze.sales_raw (
-                order_number, quantity_ordered, price_each, order_line_number,
-                order_date, status, qtr_id, month_id, year_id, product_line,
-                msrp, product_code, customer_name, phone, address_line1, address_line2,
-                city, state, postal_code, country, territory,
-                contact_last_name, contact_first_name, deal_size, load_dtm
-            )
-            SELECT
-                s.order_number, s.quantity_ordered, s.price_each, s.order_line_number,
-                s.order_date, s.status, s.qtr_id, s.month_id, s.year_id, s.product_line,
-                s.msrp, s.product_code, s.customer_name, s.phone, s.address_line1, s.address_line2,
-                s.city, s.state, s.postal_code, s.country, s.territory,
-                s.contact_last_name, s.contact_first_name, s.deal_size, GETDATE()
-            FROM #staging_sales_raw s;
+    -----------------------------------------------------------------------
+    -- 8. Clean Up & Stats
+    -----------------------------------------------------------------------
+    IF @rows_in_file > 0 EXEC('DROP INDEX IX_stg_rowhash ON #staging_sales_raw;');
+    EXEC sp_updatestats;
 
-            SET @rows_inserted = @@ROWCOUNT;
-            SET @rows_existing = 0;
-        END;
+    -----------------------------------------------------------------------
+    -- 9. Summary
+    -----------------------------------------------------------------------
+    SET @batch_end_time = GETDATE();
+    SET @duration_seconds = DATEDIFF(SECOND, @batch_start_time, @batch_end_time);
+    SELECT @rows_total = COUNT(*) FROM bronze.sales_raw;
 
-        -----------------------------------------------------------------------
-        -- 6. Clean up staging index (if created)
-        -----------------------------------------------------------------------
-        IF @rows_in_file > 0
-        BEGIN
-            -- drop the transient index to free tempdb resources
-            IF OBJECT_ID('tempdb..IX_stg_order_line') IS NOT NULL
-            BEGIN
-                -- using dynamic SQL to drop index on temp table
-                EXEC('DROP INDEX IX_stg_order_line ON #staging_sales_raw;');
-            END
-        END
+    PRINT '-----------------------------------------------------------';
+    PRINT '-- Bronze Load Summary (' + @LoadMode + ')';
+    PRINT '-----------------------------------------------------------';
 
-        -----------------------------------------------------------------------
-        -- 7. Totals and Summary
-        -----------------------------------------------------------------------
-        SELECT @rows_total = COUNT(*) FROM bronze.sales_raw;
+    SELECT 
+        'Rows Inserted' AS Metric, CAST(@rows_inserted AS NVARCHAR(20)) AS Value
+    UNION ALL SELECT 
+        'Rows Existing', CAST(@rows_existing AS NVARCHAR(20))
+    UNION ALL SELECT 
+        'Total Rows After Load', CAST(@rows_total AS NVARCHAR(20))
+    UNION ALL SELECT 
+        'Duration (seconds)', CAST(@duration_seconds AS NVARCHAR(10));
 
-        SET @batch_end_time = GETDATE();
-        SET @duration_seconds = DATEDIFF(SECOND, @batch_start_time, @batch_end_time);
+    PRINT 'Bronze Load Completed ✅';
+    PRINT '============================================================';
 
-        PRINT '-----------------------------------------------------------';
-        PRINT '-- Bronze Layer Load Summary (' + @LoadMode + ' Mode)';
-        PRINT '-----------------------------------------------------------';
+    INSERT INTO dbo.load_audit (load_start, load_end, load_mode, table_name, rows_inserted, status)
+    VALUES (@batch_start_time, @batch_end_time, @LoadMode, 'bronze.sales_raw', @rows_inserted, @load_status);
+END TRY
 
-        SELECT 
-            'File Path' AS Metric, @FilePath AS Value
-        UNION ALL SELECT 
-            'Load Type', @LoadMode
-        UNION ALL SELECT 
-            'Rows Existing', CAST(@rows_existing AS NVARCHAR(20))
-        UNION ALL SELECT 
-            'Rows Inserted', CAST(@rows_inserted AS NVARCHAR(20))
-        UNION ALL SELECT 
-            'Total Rows After Load', CAST(@rows_total AS NVARCHAR(20))
-        UNION ALL SELECT 
-            'Duration (seconds)', CAST(@duration_seconds AS NVARCHAR(10))
-        UNION ALL SELECT 
-            'Completion Time', CONVERT(NVARCHAR(30), @batch_end_time, 126);
+BEGIN CATCH
+    SET @batch_end_time = GETDATE();
+    SET @load_status = 'FAILED';
+    SET @error_message = ERROR_MESSAGE();
 
-        PRINT '-----------------------------------------------------------';
-        PRINT 'Bronze Load Completed Successfully ✅';
-        PRINT '============================================================';
+    PRINT '============================================================';
+    PRINT 'ERROR OCCURRED DURING BRONZE LOAD ❌';
+    PRINT 'Message: ' + @error_message;
+    PRINT '============================================================';
 
-        -----------------------------------------------------------------------
-        -- 8. Audit Logging
-        -----------------------------------------------------------------------
-        INSERT INTO dbo.load_audit (load_start, load_end, load_mode, table_name, rows_inserted, status)
-        VALUES (@batch_start_time, @batch_end_time, @LoadMode, 'bronze.sales_raw', @rows_inserted, @load_status);
-    END TRY
+    INSERT INTO dbo.load_audit (load_start, load_end, load_mode, table_name, rows_inserted, status, error_message)
+    VALUES (@batch_start_time, @batch_end_time, @LoadMode, 'bronze.sales_raw', 0, @load_status, @error_message);
 
-    BEGIN CATCH
-        -----------------------------------------------------------------------
-        -- Error Handling
-        -----------------------------------------------------------------------
-        SET @batch_end_time = GETDATE();
-        SET @load_status = 'FAILED';
-        SET @error_message = ERROR_MESSAGE();
+    INSERT INTO dbo.load_errors (table_name, error_message, record_data)
+    VALUES ('bronze.sales_raw', @error_message, NULL);
 
-        PRINT '============================================================';
-        PRINT 'ERROR OCCURRED DURING BRONZE LAYER LOAD';
-        PRINT 'Error Message: ' + @error_message;
-        PRINT '============================================================';
+    THROW;
+END CATCH;
 
-        INSERT INTO dbo.load_audit (load_start, load_end, load_mode, table_name, rows_inserted, status, error_message)
-        VALUES (@batch_start_time, @batch_end_time, @LoadMode, 'bronze.sales_raw', 0, @load_status, @error_message);
 
-        INSERT INTO dbo.load_errors (table_name, error_message, record_data)
-        VALUES ('bronze.sales_raw', @error_message, NULL);
-
-        THROW;
-    END CATCH;
 END;
 GO
 
-PRINT 'Procedure [bronze.load_bronze] created successfully.';
+PRINT 'Procedure [bronze.load_bronze] created successfully (Optimized)';
 GO
