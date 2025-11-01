@@ -165,51 +165,63 @@ BEGIN
 
         SET @rowcount_dimproduct = (SELECT COUNT(*) FROM silver.dim_product);
 
-        -------------------------------------------------------------------
-        -- 5. Load FactSales (hash-based incremental)
-        -------------------------------------------------------------------
-        PRINT '→ Loading FactSales (hash-based incremental)...';
+      -------------------------------------------------------------------
+-- 5. Load FactSales (hash-based incremental)
+-------------------------------------------------------------------
+PRINT '→ Loading FactSales (hash-based incremental)...';
 
-        IF OBJECT_ID('tempdb..#staging_fact') IS NOT NULL DROP TABLE #staging_fact;
-        SELECT b.order_number, b.order_date, b.status, b.quantity_ordered, b.price_each, b.deal_size,
-               c.customer_id, p.product_id, d.date_id,
-               HASHBYTES('SHA1', CONCAT(b.order_number,'|',b.product_code,'|',b.quantity_ordered,'|',b.price_each,'|',b.order_date)) AS row_hash
-        INTO #staging_fact
-        FROM bronze.sales_raw b
-        INNER JOIN silver.dim_customer c ON c.customer_name = REPLACE(LTRIM(RTRIM(b.customer_name)), '+', '') AND c.phone = dbo.KeepDigits(b.phone)
-        INNER JOIN silver.dim_product p ON p.product_code = LTRIM(RTRIM(b.product_code))
-        INNER JOIN silver.dim_date d ON CAST(b.order_date AS DATE) = d.full_date
-        WHERE b.order_number IS NOT NULL AND b.quantity_ordered > 0 AND b.price_each > 0;
+IF OBJECT_ID('tempdb..#staging_fact') IS NOT NULL DROP TABLE #staging_fact;
+SELECT 
+    b.order_number,
+    b.status,
+    b.quantity_ordered,
+    b.price_each,
+    b.deal_size,
+    (b.quantity_ordered * b.price_each) AS sales_amount,   -- ✅ Added column
+    c.customer_id,
+    p.product_id,
+    d.date_id,
+    HASHBYTES('SHA1', CONCAT(
+        b.order_number, '|', b.product_code, '|', 
+        b.quantity_ordered, '|', b.price_each, '|', b.order_date
+    )) AS row_hash
+INTO #staging_fact
+FROM bronze.sales_raw b
+INNER JOIN silver.dim_customer c 
+    ON c.customer_name = REPLACE(LTRIM(RTRIM(b.customer_name)), '+', '') 
+    AND c.phone = dbo.KeepDigits(b.phone)
+INNER JOIN silver.dim_product p 
+    ON p.product_code = LTRIM(RTRIM(b.product_code))
+INNER JOIN silver.dim_date d 
+    ON CAST(b.order_date AS DATE) = d.full_date
+WHERE b.order_number IS NOT NULL 
+  AND b.quantity_ordered > 0 
+  AND b.price_each > 0;
 
-        IF UPPER(@LoadMode) = 'INCREMENTAL'
-        BEGIN
-            INSERT INTO silver.fact_sales
-            (order_number, order_date, status, quantity_ordered, price_each, deal_size, customer_id, product_id, date_id, dwh_create_date, row_hash)
-            SELECT s.order_number, s.order_date, s.status, s.quantity_ordered, s.price_each, s.deal_size, s.customer_id, s.product_id, s.date_id, GETDATE(), s.row_hash
-            FROM #staging_fact s
-            LEFT JOIN silver.fact_sales f ON f.row_hash = s.row_hash
-            WHERE f.row_hash IS NULL;
-        END
-        ELSE
-        BEGIN
-            INSERT INTO silver.fact_sales
-            (order_number, order_date, status, quantity_ordered, price_each, deal_size, customer_id, product_id, date_id, dwh_create_date, row_hash)
-            SELECT order_number, order_date, status, quantity_ordered, price_each, deal_size, customer_id, product_id, date_id, GETDATE(), row_hash
-            FROM #staging_fact;
-        END
+IF UPPER(@LoadMode) = 'INCREMENTAL'
+BEGIN
+    INSERT INTO silver.fact_sales
+    (order_number, status, quantity_ordered, price_each, deal_size, 
+     sales_amount, customer_id, product_id, date_id, dwh_create_date, row_hash)
+    SELECT 
+        s.order_number, s.status, s.quantity_ordered, s.price_each, s.deal_size, 
+        s.sales_amount, s.customer_id, s.product_id, s.date_id, GETDATE(), s.row_hash
+    FROM #staging_fact s
+    LEFT JOIN silver.fact_sales f ON f.row_hash = s.row_hash
+    WHERE f.row_hash IS NULL;
+END
+ELSE
+BEGIN
+    INSERT INTO silver.fact_sales
+    (order_number, status, quantity_ordered, price_each, deal_size, 
+     sales_amount, customer_id, product_id, date_id, dwh_create_date, row_hash)
+    SELECT 
+        order_number, status, quantity_ordered, price_each, deal_size, 
+        sales_amount, customer_id, product_id, date_id, GETDATE(), row_hash
+    FROM #staging_fact;
+END
 
-        SET @rowcount_fact = (SELECT COUNT(*) FROM silver.fact_sales);
-
-        -------------------------------------------------------------------
-        -- 6. Recreate FKs
-        -------------------------------------------------------------------
-        PRINT '→ Recreating Foreign Key Constraints...';
-        ALTER TABLE silver.fact_sales
-            ADD CONSTRAINT fk_fact_sales_customer FOREIGN KEY (customer_id) REFERENCES silver.dim_customer(customer_id);
-        ALTER TABLE silver.fact_sales
-            ADD CONSTRAINT fk_fact_sales_product FOREIGN KEY (product_id) REFERENCES silver.dim_product(product_id);
-        ALTER TABLE silver.fact_sales
-            ADD CONSTRAINT fk_fact_sales_date FOREIGN KEY (date_id) REFERENCES silver.dim_date(date_id);
+SET @rowcount_fact = (SELECT COUNT(*) FROM silver.fact_sales);
 
         -------------------------------------------------------------------
         -- 7. Audit Logging
