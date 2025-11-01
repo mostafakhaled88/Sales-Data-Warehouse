@@ -36,10 +36,10 @@ END;
 GO
 
 -------------------------------------------------------------------------------
--- 3. Create Table: bronze.sales_raw
+-- 3. Create Table: bronze.sales_raw (with refinements)
 -------------------------------------------------------------------------------
 CREATE TABLE bronze.sales_raw (
-    sales_raw_id         INT IDENTITY(1,1) PRIMARY KEY,  -- Surrogate key for tracking
+    sales_raw_id         INT IDENTITY(1,1) PRIMARY KEY,
     order_number         INT NULL,
     quantity_ordered     INT NULL,
     price_each           DECIMAL(10,2) NULL,
@@ -66,29 +66,39 @@ CREATE TABLE bronze.sales_raw (
     deal_size            VARCHAR(50) NULL,
 
     -- Audit Columns
-    source_file_name     VARCHAR(255) NULL,   -- Useful for batch tracking
+    source_file_name     VARCHAR(255) NULL,
     load_dtm             DATETIME DEFAULT GETDATE(),
-    row_hash             AS (CONVERT(VARCHAR(64), HASHBYTES('SHA2_256',
-                          CONCAT(
-                              ISNULL(CONVERT(VARCHAR(50), order_number), ''),
-                              '|', ISNULL(product_code, ''),
-                              '|', ISNULL(customer_name, ''),
-                              '|', ISNULL(order_date, '')
-                          )), 2)) PERSISTED   -- Helps detect new/changed rows
+    
+    -- Hash for change detection
+    row_hash AS (
+        CONVERT(VARCHAR(64), HASHBYTES('SHA2_256',
+            CONCAT_WS('|',
+                ISNULL(CONVERT(VARCHAR(50), order_number), ''),
+                ISNULL(CONVERT(VARCHAR(50), order_line_number), ''),
+                ISNULL(product_code, ''),
+                ISNULL(customer_name, ''),
+                ISNULL(order_date, ''),
+                ISNULL(CONVERT(VARCHAR(10), quantity_ordered), ''),
+                ISNULL(CONVERT(VARCHAR(10), price_each), '')
+            )
+        ), 2)
+    ) PERSISTED
 );
 GO
 
 -------------------------------------------------------------------------------
 -- 4. Indexes for Incremental Load Performance
 -------------------------------------------------------------------------------
--- Unique/lookup index for change detection (based on business keys)
-CREATE UNIQUE INDEX IX_sales_raw_order_product_customer
-    ON bronze.sales_raw(order_number, product_code, customer_name)
+-- Business key index
+CREATE UNIQUE INDEX IX_sales_raw_business_key
+    ON bronze.sales_raw(order_number, order_line_number, product_code)
     WHERE order_number IS NOT NULL;
 
--- Hash index for faster incremental comparison
-CREATE INDEX IX_sales_raw_hash
+-- Hash index
+CREATE NONCLUSTERED INDEX IX_sales_raw_rowhash
     ON bronze.sales_raw(row_hash);
+GO
+
 
 -------------------------------------------------------------------------------
 -- 5. Confirmation Message
