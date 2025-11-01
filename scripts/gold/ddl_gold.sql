@@ -1,100 +1,38 @@
-USE SalesDWH;
-GO
-
-IF OBJECT_ID('gold.vw_SalesSummary', 'V') IS NOT NULL
-    DROP VIEW gold.vw_SalesSummary;
-GO
-
-CREATE VIEW gold.vw_SalesSummary
-AS
-SELECT 
-    d.YearName AS [Year],
-    d.MonthName AS [Month],
-    p.ProductLine,
-    p.ProductCode,
-    SUM(f.QuantityOrdered) AS TotalQuantity,
-    SUM(f.Sales) AS TotalSales,
-    ROUND(AVG(f.PriceEach), 2) AS AvgUnitPrice
-FROM silver.FactSales f
-JOIN silver.DimDate d ON f.DateID = d.DateID
-JOIN silver.DimProduct p ON f.ProductID = p.ProductID
-GROUP BY 
-    d.YearName, d.MonthName, 
-    p.ProductLine, p.ProductCode;
-GO
-
-
-
-
-
-
-IF OBJECT_ID('gold.vw_ProductPerformance', 'V') IS NOT NULL
-    DROP VIEW gold.vw_ProductPerformance;
-GO
-
-CREATE VIEW gold.vw_ProductPerformance
-AS
+CREATE OR ALTER VIEW gold.vw_sales_performance AS
 SELECT
-    p.ProductLine,
-    p.ProductCode,
-    p.MSRP,
-    SUM(f.Sales) AS TotalRevenue,
-    SUM(f.QuantityOrdered) AS TotalUnitsSold,
-    ROUND(AVG(f.PriceEach), 2) AS AvgSellingPrice,
-    ROUND(SUM(f.Sales) / NULLIF(SUM(f.QuantityOrdered), 0), 2) AS RevenuePerUnit
-FROM silver.FactSales f
-JOIN silver.DimProduct p ON f.ProductID = p.ProductID
-GROUP BY
-    p.ProductLine, p.ProductCode, p.MSRP;
-GO
+   
+    -- Sales facts
+    fs.order_number,
+    fs.status,
+    fs.quantity_ordered,
+    fs.price_each,
+    fs.sales_amount,
+    fs.deal_size,
+
+	 -- Date dimensions
+    d.full_date,
+    d.year_number,
+    d.month_number,
+    d.month_name,
+    d.quarter_name,
+
+    -- Customer dimensions
+    c.customer_name,
+    c.country,
+    c.territory,
+
+    -- Product dimensions
+    p.product_code,
+    p.product_line
 
 
-
-
-IF OBJECT_ID('gold.vw_CustomerInsights', 'V') IS NOT NULL
-    DROP VIEW gold.vw_CustomerInsights;
-GO
-
-CREATE VIEW gold.vw_CustomerInsights
-AS
-SELECT
-    c.CustomerID,
-    c.CustomerName,
-    c.Country,
-    c.Territory,
-    COUNT(DISTINCT f.OrderNumber) AS TotalOrders,
-    SUM(f.Sales) AS TotalSpent,
-    SUM(f.QuantityOrdered) AS TotalItemsPurchased,
-    ROUND(AVG(f.PriceEach), 2) AS AvgPricePerItem
-FROM silver.FactSales f
-JOIN silver.DimCustomer c ON f.CustomerID = c.CustomerID
-GROUP BY
-    c.CustomerID, c.CustomerName, c.Country, c.Territory;
-GO
-
-
-
-
-
-IF OBJECT_ID('gold.vw_RegionalPerformance', 'V') IS NOT NULL
-    DROP VIEW gold.vw_RegionalPerformance;
-GO
-
-CREATE VIEW gold.vw_RegionalPerformance
-AS
-SELECT
-    c.Country,
-    c.Territory,
-    d.YearName AS [Year],
-    d.MonthName AS [Month],
-    SUM(f.Sales) AS TotalSales,
-    SUM(f.QuantityOrdered) AS TotalQuantity,
-    COUNT(DISTINCT f.CustomerID) AS ActiveCustomers
-FROM silver.FactSales f
-JOIN silver.DimCustomer c ON f.CustomerID = c.CustomerID
-JOIN silver.DimDate d ON f.DateID = d.DateID
-GROUP BY
-    c.Country, c.Territory, d.YearName, d.MonthName;
-GO
+   
+FROM silver.fact_sales fs
+LEFT JOIN silver.dim_date d 
+    ON fs.date_id = d.date_id
+LEFT JOIN silver.dim_customer c 
+    ON fs.customer_id = c.customer_id
+LEFT JOIN silver.dim_product p 
+    ON fs.product_id = p.product_id;
 
 
