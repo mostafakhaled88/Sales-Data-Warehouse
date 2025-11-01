@@ -6,7 +6,8 @@
 
   Features:
       - Supports FULL and INCREMENTAL load modes.
-      - Uses a temporary staging table for comparison.
+      - Uses a temporary staging table for comparison (with a transient index).
+      - Replaces NOT EXISTS with indexed LEFT JOIN anti-join for performance.
       - Displays a clean, structured summary (UNION ALL format).
       - Logs all operations in load_audit and load_errors tables.
 
@@ -82,30 +83,30 @@ BEGIN
             DROP TABLE #staging_sales_raw;
 
         CREATE TABLE #staging_sales_raw (
-            order_number         INT,
-            quantity_ordered     INT,
-            price_each           DECIMAL(10,2),
-            order_line_number    INT,
-            order_date           VARCHAR(50),
-            status               VARCHAR(50),
-            qtr_id               INT,
-            month_id             INT,
-            year_id              INT,
-            product_line         VARCHAR(100),
-            msrp                 INT,
-            product_code         VARCHAR(50),
-            customer_name        VARCHAR(255),
-            phone                VARCHAR(50),
-            address_line1        VARCHAR(255),
-            address_line2        VARCHAR(255),
-            city                 VARCHAR(100),
-            state                VARCHAR(100),
-            postal_code          VARCHAR(20),
-            country              VARCHAR(100),
-            territory            VARCHAR(100),
-            contact_last_name    VARCHAR(100),
-            contact_first_name   VARCHAR(100),
-            deal_size            VARCHAR(50)
+            order_number         INT NULL,
+            quantity_ordered     INT NULL,
+            price_each           DECIMAL(10,2) NULL,
+            order_line_number    INT NULL,
+            order_date           VARCHAR(50) NULL,
+            status               VARCHAR(50) NULL,
+            qtr_id               INT NULL,
+            month_id             INT NULL,
+            year_id              INT NULL,
+            product_line         VARCHAR(100) NULL,
+            msrp                 INT NULL,
+            product_code         VARCHAR(50) NULL,
+            customer_name        VARCHAR(255) NULL,
+            phone                VARCHAR(50) NULL,
+            address_line1        VARCHAR(255) NULL,
+            address_line2        VARCHAR(255) NULL,
+            city                 VARCHAR(100) NULL,
+            state                VARCHAR(100) NULL,
+            postal_code          VARCHAR(20) NULL,
+            country              VARCHAR(100) NULL,
+            territory            VARCHAR(100) NULL,
+            contact_last_name    VARCHAR(100) NULL,
+            contact_first_name   VARCHAR(100) NULL,
+            deal_size            VARCHAR(50) NULL
         );
 
         SET @sql = N'
@@ -126,11 +127,20 @@ BEGIN
         PRINT '------------------------------------------------------------';
 
         -----------------------------------------------------------------------
-        -- 5. Load Logic
+        -- 4.1 Create a transient index on staging for faster joins (only if rows > 0)
+        -----------------------------------------------------------------------
+        IF @rows_in_file > 0
+        BEGIN
+            -- create index to help the join/anti-join
+            EXEC('CREATE NONCLUSTERED INDEX IX_stg_order_line ON #staging_sales_raw(order_number, order_line_number);');
+        END
+
+        -----------------------------------------------------------------------
+        -- 5. Load Logic: optimized anti-join using LEFT JOIN + indexed staging
         -----------------------------------------------------------------------
         IF @LoadMode = 'INCR'
         BEGIN
-            PRINT 'Performing INCREMENTAL LOAD: Inserting only new records...';
+            PRINT 'Performing INCREMENTAL LOAD: Inserting only new records (indexed anti-join)...';
 
             INSERT INTO bronze.sales_raw (
                 order_number, quantity_ordered, price_each, order_line_number,
@@ -139,14 +149,17 @@ BEGIN
                 city, state, postal_code, country, territory,
                 contact_last_name, contact_first_name, deal_size, load_dtm
             )
-            SELECT s.*, GETDATE()
+            SELECT
+                s.order_number, s.quantity_ordered, s.price_each, s.order_line_number,
+                s.order_date, s.status, s.qtr_id, s.month_id, s.year_id, s.product_line,
+                s.msrp, s.product_code, s.customer_name, s.phone, s.address_line1, s.address_line2,
+                s.city, s.state, s.postal_code, s.country, s.territory,
+                s.contact_last_name, s.contact_first_name, s.deal_size, GETDATE()
             FROM #staging_sales_raw s
-            WHERE NOT EXISTS (
-                SELECT 1
-                FROM bronze.sales_raw b
-                WHERE b.order_number = s.order_number
-                  AND b.order_line_number = s.order_line_number
-            );
+            LEFT JOIN bronze.sales_raw b
+                ON b.order_number = s.order_number
+               AND b.order_line_number = s.order_line_number
+            WHERE b.order_number IS NULL;  -- anti-join: only rows not present in target
 
             SET @rows_inserted = @@ROWCOUNT;
             SET @rows_existing = @rows_in_file - @rows_inserted;
@@ -162,18 +175,36 @@ BEGIN
                 city, state, postal_code, country, territory,
                 contact_last_name, contact_first_name, deal_size, load_dtm
             )
-            SELECT s.*, GETDATE()
+            SELECT
+                s.order_number, s.quantity_ordered, s.price_each, s.order_line_number,
+                s.order_date, s.status, s.qtr_id, s.month_id, s.year_id, s.product_line,
+                s.msrp, s.product_code, s.customer_name, s.phone, s.address_line1, s.address_line2,
+                s.city, s.state, s.postal_code, s.country, s.territory,
+                s.contact_last_name, s.contact_first_name, s.deal_size, GETDATE()
             FROM #staging_sales_raw s;
 
             SET @rows_inserted = @@ROWCOUNT;
             SET @rows_existing = 0;
         END;
 
-        SELECT @rows_total = COUNT(*) FROM bronze.sales_raw;
+        -----------------------------------------------------------------------
+        -- 6. Clean up staging index (if created)
+        -----------------------------------------------------------------------
+        IF @rows_in_file > 0
+        BEGIN
+            -- drop the transient index to free tempdb resources
+            IF OBJECT_ID('tempdb..IX_stg_order_line') IS NOT NULL
+            BEGIN
+                -- using dynamic SQL to drop index on temp table
+                EXEC('DROP INDEX IX_stg_order_line ON #staging_sales_raw;');
+            END
+        END
 
         -----------------------------------------------------------------------
-        -- 6. Summary (UNION ALL format)
+        -- 7. Totals and Summary
         -----------------------------------------------------------------------
+        SELECT @rows_total = COUNT(*) FROM bronze.sales_raw;
+
         SET @batch_end_time = GETDATE();
         SET @duration_seconds = DATEDIFF(SECOND, @batch_start_time, @batch_end_time);
 
@@ -185,8 +216,8 @@ BEGIN
             'File Path' AS Metric, @FilePath AS Value
         UNION ALL SELECT 
             'Load Type', @LoadMode
-	    UNION ALL SELECT 
-            'Rows Existing ', CAST(@rows_existing AS NVARCHAR(20))
+        UNION ALL SELECT 
+            'Rows Existing', CAST(@rows_existing AS NVARCHAR(20))
         UNION ALL SELECT 
             'Rows Inserted', CAST(@rows_inserted AS NVARCHAR(20))
         UNION ALL SELECT 
@@ -201,7 +232,7 @@ BEGIN
         PRINT '============================================================';
 
         -----------------------------------------------------------------------
-        -- 7. Audit Logging
+        -- 8. Audit Logging
         -----------------------------------------------------------------------
         INSERT INTO dbo.load_audit (load_start, load_end, load_mode, table_name, rows_inserted, status)
         VALUES (@batch_start_time, @batch_end_time, @LoadMode, 'bronze.sales_raw', @rows_inserted, @load_status);
