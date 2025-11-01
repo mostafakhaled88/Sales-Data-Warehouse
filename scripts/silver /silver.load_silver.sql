@@ -114,9 +114,9 @@ BEGIN
 
         IF OBJECT_ID('tempdb..#staging_customers') IS NOT NULL DROP TABLE #staging_customers;
         SELECT DISTINCT  
-            REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(customer_name)), '+', ''), '(', ''), ')', ''), '"', ''), '.', ''), ',', ''), '/', '') AS customer_name,  
-            REPLACE(LTRIM(RTRIM(contact_first_name)), '-', '') AS contact_first_name,  
-            REPLACE(LTRIM(RTRIM(contact_last_name)), '-', '') AS contact_last_name,  
+            dbo.ProperCase(customer_name) AS customer_name,  
+            dbo.ProperCase(contact_first_name) AS contact_first_name,  
+            dbo.ProperCase(contact_last_name) AS contact_last_name,  
             dbo.KeepDigits(phone) AS phone,  
             LTRIM(RTRIM(address_line1)) AS address_line,  
             LTRIM(RTRIM(city)) AS city,  
@@ -188,7 +188,7 @@ SELECT
 INTO #staging_fact
 FROM bronze.sales_raw b
 INNER JOIN silver.dim_customer c 
-    ON c.customer_name = REPLACE(LTRIM(RTRIM(b.customer_name)), '+', '') 
+    ON c.customer_name = dbo.ProperCase(b.customer_name) 
     AND c.phone = dbo.KeepDigits(b.phone)
 INNER JOIN silver.dim_product p 
     ON p.product_code = LTRIM(RTRIM(b.product_code))
